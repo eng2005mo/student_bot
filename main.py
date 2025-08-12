@@ -83,7 +83,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help - قائمة الأوامر\n"
         "/status - حالة البوت والبوابة\n"
         "/addreminder YYYY-MM-DD H M رسالة - إضافة تذكير\n"
-        "   مثال: /addreminder 2025-10-01 1 0 بدء التسجيل\n"
+        "   مثال: /addreminder 2025-10-01 13 00 بدء التسجيل\n"
         "/listreminders - عرض التذكيرات\n"
         "/delreminder رقم - حذف التذكير بالرقم\n"
     )
@@ -97,7 +97,7 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "خطأ في الصيغة.\n"
             "استخدم: /addreminder YYYY-MM-DD H M رسالة\n"
-            "مثال: /addreminder 2025-10-01 1 0 بدء التسجيل"
+            "مثال: /addreminder 2025-10-01 13 00 بدء التسجيل"
         )
         return
     try:
@@ -118,7 +118,7 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reminders.append({"datetime": dt.isoformat(), "message": message})
     reminders.sort(key=lambda x: x["datetime"])
     save_reminders(reminders)
-    await update.message.reply_text(f"✅ تم إضافة التذكير: {dt} - {message}")
+    await update.message.reply_text(f"✅ تم إضافة التذكير: {dt.strftime('%Y-%m-%d %H:%M')} - {message}")
 
 async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reminders = load_reminders()
@@ -161,7 +161,7 @@ def reminders_checker(application):
                 new_reminders.append(r)
         if len(new_reminders) != len(reminders):
             save_reminders(new_reminders)
-        time.sleep(10)  # يفحص كل 10 ثواني
+        time.sleep(10)
 
 def schedule_checker(application):
     schedule.every(10).seconds.do(check_for_updates, application=application)
@@ -169,7 +169,7 @@ def schedule_checker(application):
         schedule.run_pending()
         time.sleep(1)
 
-def main():
+async def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -179,8 +179,7 @@ def main():
     application.add_handler(CommandHandler("listreminders", list_reminders))
     application.add_handler(CommandHandler("delreminder", del_reminder))
 
-    # شغل threads لفحص التذكيرات والموقع بشكل دوري
-    from threading import Thread
+    # شغّل threads للمراقبة في الخلفية
     thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
     thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
 
@@ -189,12 +188,13 @@ def main():
 
     print("Bot started.")
 
-    # شغل ويب هوك
-    application.run_webhook(
+    await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
     )
 
 if __name__ == "__main__":
-    main()
+    # شغّل event loop بنفسك لتجنب خطأ اغلاق حلقة الاحداث
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
