@@ -15,6 +15,7 @@ import datetime
 nest_asyncio.apply()
 load_dotenv()
 
+# قراءة المتغيرات من .env
 PORTAL_URL = os.getenv("PORTAL_URL")
 PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")
 PORTAL_PASSWORD = os.getenv("PORTAL_PASSWORD")
@@ -179,7 +180,6 @@ async def main():
     application.add_handler(CommandHandler("listreminders", list_reminders))
     application.add_handler(CommandHandler("delreminder", del_reminder))
 
-    # شغّل threads للمراقبة في الخلفية
     thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
     thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
 
@@ -191,10 +191,10 @@ async def main():
     await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
+        webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}",
+        path=f"/{TELEGRAM_BOT_TOKEN}"
     )
 
 if __name__ == "__main__":
-    # شغّل event loop بنفسك لتجنب خطأ اغلاق حلقة الاحداث
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
