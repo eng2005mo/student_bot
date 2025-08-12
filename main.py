@@ -1,24 +1,23 @@
 import os
-import asyncio
-import nest_asyncio
-from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram import Update
-import requests
-from bs4 import BeautifulSoup
 import json
-import schedule
 import time
-from threading import Thread
 import datetime
+import requests
+from threading import Thread
+from bs4 import BeautifulSoup
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from dotenv import load_dotenv
 
 load_dotenv()
 
 PORTAL_URL = os.getenv("PORTAL_URL")
 PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")
 PORTAL_PASSWORD = os.getenv("PORTAL_PASSWORD")
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID"))
+
 PORT = int(os.getenv("PORT", 8443))
 RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
@@ -44,8 +43,7 @@ def fetch_portal_data():
     session.post(PORTAL_URL, data=login_payload)
     response = session.get(PORTAL_URL)
     soup = BeautifulSoup(response.text, "html.parser")
-    data_text = soup.get_text()
-    return data_text
+    return soup.get_text()
 
 async def notify_update(application, message):
     await application.bot.send_message(chat_id=CHAT_ID, text=message)
@@ -55,10 +53,10 @@ def check_for_updates(application):
     new_data = fetch_portal_data()
     if old_data.get("content") != new_data:
         save_data({"content": new_data})
-        loop = asyncio.get_event_loop()
+        import asyncio
         asyncio.run_coroutine_threadsafe(
-            notify_update(application, "📢 تم تحديث جديد في البوابة! الرجاء التحقق."),
-            loop
+            notify_update(application, "📢 تم تحديث جديد في البوابة! الرجاء التحقق."), 
+            application.bot.loop
         )
 
 def save_reminders(reminders):
@@ -148,6 +146,7 @@ async def del_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ تم حذف التذكير: {dt.strftime('%Y-%m-%d %H:%M')} - {removed['message']}")
 
 def reminders_checker(application):
+    import asyncio
     while True:
         now = datetime.datetime.now()
         reminders = load_reminders()
@@ -155,9 +154,8 @@ def reminders_checker(application):
         for r in reminders:
             reminder_time = datetime.datetime.fromisoformat(r["datetime"])
             if now >= reminder_time:
-                loop = asyncio.get_event_loop()
                 asyncio.run_coroutine_threadsafe(
-                    notify_update(application, f"⏰ تذكير: {r['message']}"), loop
+                    notify_update(application, f"⏰ تذكير: {r['message']}"), application.bot.loop
                 )
             else:
                 new_reminders.append(r)
@@ -166,12 +164,20 @@ def reminders_checker(application):
         time.sleep(10)
 
 def schedule_checker(application):
+    import schedule
+    import time
     schedule.every(10).seconds.do(check_for_updates, application=application)
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-async def main():
+def run_background_jobs(application):
+    thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
+    thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
+    thread_schedule.start()
+    thread_reminders.start()
+
+def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -181,25 +187,15 @@ async def main():
     application.add_handler(CommandHandler("listreminders", list_reminders))
     application.add_handler(CommandHandler("delreminder", del_reminder))
 
-    thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
-    thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
-
-    thread_schedule.start()
-    thread_reminders.start()
+    run_background_jobs(application)
 
     print("Bot started.")
 
-    await application.run_webhook(
+    application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
     )
 
 if __name__ == "__main__":
-    # استعمل nest_asyncio لتجنب الخطأ عند وجود حلقة أحداث تعمل مسبقاً
-    import nest_asyncio
-    nest_asyncio.apply()
-
-    # شغل الloop بطريقة مناسبة
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    main()
