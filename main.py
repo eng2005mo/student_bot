@@ -1,20 +1,25 @@
 import os
 import asyncio
-import json
-import datetime
+import nest_asyncio
+from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
 import requests
 from bs4 import BeautifulSoup
+import json
+import schedule
+import time
+from threading import Thread
+import datetime
 
-# قراءة متغيرات البيئة حسب ما وضحت
-PORTAL_URL = os.getenv("PORTAL_URL")  # http://appserver.fet.edu.jo:7778/reg_new/index.jsp
-PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")  # 32315125016
-PORTAL_PASSWORD = os.getenv("PORTAL_PASSWORD")  # 2001160162
+nest_asyncio.apply()
+load_dotenv()
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # توكن البوت
-CHAT_ID = int(os.getenv("CHAT_ID"))  # رقم الشات كرقم صحيح
-
+PORTAL_URL = os.getenv("PORTAL_URL")
+PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")
+PORTAL_PASSWORD = os.getenv("PORTAL_PASSWORD")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = int(os.getenv("CHAT_ID"))
 PORT = int(os.getenv("PORT", 8443))
 RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
@@ -31,16 +36,6 @@ def load_data():
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_reminders(reminders):
-    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(reminders, f, ensure_ascii=False, indent=2)
-
-def load_reminders():
-    if not os.path.exists(REMINDERS_FILE):
-        return []
-    with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
 def fetch_portal_data():
     session = requests.Session()
     login_payload = {
@@ -50,17 +45,30 @@ def fetch_portal_data():
     session.post(PORTAL_URL, data=login_payload)
     response = session.get(PORTAL_URL)
     soup = BeautifulSoup(response.text, "html.parser")
-    return soup.get_text()
+    data_text = soup.get_text()
+    return data_text
 
 async def notify_update(application, message):
     await application.bot.send_message(chat_id=CHAT_ID, text=message)
 
-async def check_for_updates(application):
+def check_for_updates(application):
     old_data = load_data()
     new_data = fetch_portal_data()
     if old_data.get("content") != new_data:
         save_data({"content": new_data})
-        await notify_update(application, "📢 تم تحديث جديد في البوابة! الرجاء التحقق.")
+        asyncio.run_coroutine_threadsafe(
+            notify_update(application, "📢 تم تحديث جديد في البوابة! الرجاء التحقق."), asyncio.get_event_loop()
+        )
+
+def save_reminders(reminders):
+    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(reminders, f, ensure_ascii=False, indent=2)
+
+def load_reminders():
+    if not os.path.exists(REMINDERS_FILE):
+        return []
+    with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -110,7 +118,7 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reminders.append({"datetime": dt.isoformat(), "message": message})
     reminders.sort(key=lambda x: x["datetime"])
     save_reminders(reminders)
-    await update.message.reply_text(f"✅ تم إضافة التذكير: {dt.strftime('%Y-%m-%d %H:%M')} - {message}")
+    await update.message.reply_text(f"✅ تم إضافة التذكير: {dt} - {message}")
 
 async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reminders = load_reminders()
@@ -138,7 +146,7 @@ async def del_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dt = datetime.datetime.fromisoformat(removed["datetime"])
     await update.message.reply_text(f"✅ تم حذف التذكير: {dt.strftime('%Y-%m-%d %H:%M')} - {removed['message']}")
 
-async def reminders_checker(application):
+def reminders_checker(application):
     while True:
         now = datetime.datetime.now()
         reminders = load_reminders()
@@ -146,22 +154,22 @@ async def reminders_checker(application):
         for r in reminders:
             reminder_time = datetime.datetime.fromisoformat(r["datetime"])
             if now >= reminder_time:
-                await notify_update(application, f"⏰ تذكير: {r['message']}")
+                asyncio.run_coroutine_threadsafe(
+                    notify_update(application, f"⏰ تذكير: {r['message']}"), asyncio.get_event_loop()
+                )
             else:
                 new_reminders.append(r)
         if len(new_reminders) != len(reminders):
             save_reminders(new_reminders)
-        await asyncio.sleep(10)
+        time.sleep(10)  # يفحص كل 10 ثواني
 
-async def portal_checker(application):
+def schedule_checker(application):
+    schedule.every(10).seconds.do(check_for_updates, application=application)
     while True:
-        try:
-            await check_for_updates(application)
-        except Exception as e:
-            print(f"خطأ في فحص البوابة: {e}")
-        await asyncio.sleep(10)
+        schedule.run_pending()
+        time.sleep(1)
 
-async def main():
+def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -171,18 +179,22 @@ async def main():
     application.add_handler(CommandHandler("listreminders", list_reminders))
     application.add_handler(CommandHandler("delreminder", del_reminder))
 
-    asyncio.create_task(reminders_checker(application))
-    asyncio.create_task(portal_checker(application))
+    # شغل threads لفحص التذكيرات والموقع بشكل دوري
+    from threading import Thread
+    thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
+    thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
 
-    await application.start()
-    await application.updater.start_webhook(
+    thread_schedule.start()
+    thread_reminders.start()
+
+    print("Bot started.")
+
+    # شغل ويب هوك
+    application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
     )
-    print("Webhook running...")
-
-    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
