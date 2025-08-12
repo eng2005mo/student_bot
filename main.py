@@ -1,16 +1,18 @@
 import os
-import json
-import requests
-import datetime
-import time
-import schedule
-from threading import Thread
-from bs4 import BeautifulSoup
+import asyncio
+import nest_asyncio
 from dotenv import load_dotenv
-
-from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update
+import requests
+from bs4 import BeautifulSoup
+import json
+import schedule
+import time
+from threading import Thread
+import datetime
 
+nest_asyncio.apply()
 load_dotenv()
 
 PORTAL_URL = os.getenv("PORTAL_URL")
@@ -24,18 +26,15 @@ RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 DATA_FILE = os.getenv("DATA_FILE", "last_data.json")
 REMINDERS_FILE = os.getenv("REMINDERS_FILE", "reminders.json")
 
-
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
 
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {}
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 def fetch_portal_data():
     session = requests.Session()
@@ -46,28 +45,24 @@ def fetch_portal_data():
     session.post(PORTAL_URL, data=login_payload)
     response = session.get(PORTAL_URL)
     soup = BeautifulSoup(response.text, "html.parser")
-    return soup.get_text()
-
+    data_text = soup.get_text()
+    return data_text
 
 async def notify_update(application, message):
     await application.bot.send_message(chat_id=CHAT_ID, text=message)
-
 
 def check_for_updates(application):
     old_data = load_data()
     new_data = fetch_portal_data()
     if old_data.get("content") != new_data:
         save_data({"content": new_data})
-        # أرسل الرسالة بطريقة thread-safe
-        application.create_task(
-            notify_update(application, "📢 تم تحديث جديد في البوابة! الرجاء التحقق.")
+        asyncio.run_coroutine_threadsafe(
+            notify_update(application, "📢 تم تحديث جديد في البوابة! الرجاء التحقق."), asyncio.get_event_loop()
         )
-
 
 def save_reminders(reminders):
     with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
         json.dump(reminders, f, ensure_ascii=False, indent=2)
-
 
 def load_reminders():
     if not os.path.exists(REMINDERS_FILE):
@@ -75,13 +70,11 @@ def load_reminders():
     with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "مرحباً! البوت يعمل بنجاح.\n"
         "استخدم /help لرؤية الأوامر المتاحة."
     )
-
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -95,10 +88,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/delreminder رقم - حذف التذكير بالرقم\n"
     )
 
-
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ البوت يعمل.\n🔄 يتم مراقبة البوابة والتذكيرات.")
-
 
 async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -129,7 +120,6 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_reminders(reminders)
     await update.message.reply_text(f"✅ تم إضافة التذكير: {dt.strftime('%Y-%m-%d %H:%M')} - {message}")
 
-
 async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reminders = load_reminders()
     if not reminders:
@@ -140,7 +130,6 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.datetime.fromisoformat(r["datetime"])
         text += f"{i}. {dt.strftime('%Y-%m-%d %H:%M')} - {r['message']}\n"
     await update.message.reply_text(text)
-
 
 async def del_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -157,7 +146,6 @@ async def del_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dt = datetime.datetime.fromisoformat(removed["datetime"])
     await update.message.reply_text(f"✅ تم حذف التذكير: {dt.strftime('%Y-%m-%d %H:%M')} - {removed['message']}")
 
-
 def reminders_checker(application):
     while True:
         now = datetime.datetime.now()
@@ -166,8 +154,8 @@ def reminders_checker(application):
         for r in reminders:
             reminder_time = datetime.datetime.fromisoformat(r["datetime"])
             if now >= reminder_time:
-                application.create_task(
-                    notify_update(application, f"⏰ تذكير: {r['message']}")
+                asyncio.run_coroutine_threadsafe(
+                    notify_update(application, f"⏰ تذكير: {r['message']}"), asyncio.get_event_loop()
                 )
             else:
                 new_reminders.append(r)
@@ -175,15 +163,13 @@ def reminders_checker(application):
             save_reminders(new_reminders)
         time.sleep(10)
 
-
 def schedule_checker(application):
     schedule.every(10).seconds.do(check_for_updates, application=application)
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-
-def main():
+async def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -193,19 +179,22 @@ def main():
     application.add_handler(CommandHandler("listreminders", list_reminders))
     application.add_handler(CommandHandler("delreminder", del_reminder))
 
-    # شغّل threads للمراقبة في الخلفية
-    Thread(target=schedule_checker, args=(application,), daemon=True).start()
-    Thread(target=reminders_checker, args=(application,), daemon=True).start()
+    # تشغيل الـ threads في الخلفية لمراقبة البوابة والتذكيرات
+    thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
+    thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
+
+    thread_schedule.start()
+    thread_reminders.start()
 
     print("Bot started.")
 
-    # شغّل Webhook مباشرة بدون await ولا asyncio.run
-    application.run_webhook(
+    await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
     )
 
-
 if __name__ == "__main__":
-    main()
+    import nest_asyncio
+    nest_asyncio.apply()
+    asyncio.run(main())
