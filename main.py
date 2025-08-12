@@ -33,22 +33,15 @@ def load_data():
         return json.load(f)
 
 def fetch_portal_data():
-    # مثال بسيط: الدخول للبوابة وتسجيل الدخول (تحتاج تعديل حسب البوابة الحقيقية)
     session = requests.Session()
     login_payload = {
         "username": PORTAL_USERNAME,
         "password": PORTAL_PASSWORD,
     }
-    # تعديل حسب تفاصيل البوابة
     session.post(PORTAL_URL, data=login_payload)
-
-    # صفحة العلامات ومواعيد الامتحانات
     response = session.get(PORTAL_URL)
     soup = BeautifulSoup(response.text, "html.parser")
-
-    # مثال: استخراج نص معين من الصفحة
     data_text = soup.get_text()
-
     return data_text
 
 async def notify_update(application, message):
@@ -57,7 +50,6 @@ async def notify_update(application, message):
 def check_for_updates(application):
     old_data = load_data()
     new_data = fetch_portal_data()
-
     if old_data.get("content") != new_data:
         save_data({"content": new_data})
         asyncio.run_coroutine_threadsafe(
@@ -77,17 +69,30 @@ def run_schedule(application):
         time.sleep(1)
 
 async def main():
+    # الرابط الكامل للويب هوك - مهم جداً! Replace with your actual Render hostname env variable
+    RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    PORT = int(os.getenv("PORT", 8443))
+
+    if not RENDER_HOSTNAME:
+        print("Environment variable RENDER_EXTERNAL_HOSTNAME is missing!")
+        return
+
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
 
-    # تشغيل المراقبة في Thread مستقل لتجنب حظر البوت
+    # شغل الجدولة بفصل Thread
     thread = Thread(target=run_schedule, args=(application,), daemon=True)
     thread.start()
 
-    print("Bot started.")
-    await application.run_polling()
+    # شغل البوت كـ webhook (استبدال polling)
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_BOT_TOKEN,
+        webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
