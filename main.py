@@ -1,7 +1,5 @@
 import os
 import asyncio
-import nest_asyncio
-from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
 import requests
@@ -12,10 +10,10 @@ import time
 from threading import Thread
 import datetime
 
-nest_asyncio.apply()
+# تحميل متغيرات البيئة
+from dotenv import load_dotenv
 load_dotenv()
 
-# قراءة المتغيرات من .env
 PORTAL_URL = os.getenv("PORTAL_URL")
 PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")
 PORTAL_PASSWORD = os.getenv("PORTAL_PASSWORD")
@@ -173,6 +171,7 @@ def schedule_checker(application):
 async def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # إضافة الهاندلرز
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status))
@@ -180,21 +179,20 @@ async def main():
     application.add_handler(CommandHandler("listreminders", list_reminders))
     application.add_handler(CommandHandler("delreminder", del_reminder))
 
+    # تشغيل التيمز الخلفية
     thread_schedule = Thread(target=schedule_checker, args=(application,), daemon=True)
     thread_reminders = Thread(target=reminders_checker, args=(application,), daemon=True)
-
     thread_schedule.start()
     thread_reminders.start()
 
     print("Bot started.")
 
+    # تشغيل webhook (بدون path لأنه غير مدعوم بالإصدار 22.1)
     await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}",
-        path=f"/{TELEGRAM_BOT_TOKEN}"
+        webhook_url=f"https://{RENDER_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
     )
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
